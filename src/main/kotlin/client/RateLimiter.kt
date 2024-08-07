@@ -5,10 +5,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import java.time.Duration
-import kotlin.coroutines.CoroutineContext
 import kotlin.math.min
 
-class RateLimiter(private val resource: Resource) {
+class RateLimiter(private val resource: IResource) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val mutex = Mutex()

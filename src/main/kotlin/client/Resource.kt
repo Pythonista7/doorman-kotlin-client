@@ -1,17 +1,54 @@
 package client
 
+import doorman.Doorman
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.sync.Mutex
 
-interface Resource {
-    val id: String
-    val wants: Double
-    val capacity: ReceiveChannel<Double>
-    suspend fun ask(capacity: Double): Result<Unit>
-    suspend fun release(): Result<Unit>
-}
+class Resource(override val id: String, override val client: DoormanClient) : IResource {
 
-interface ResourceAction {
-    val resource: Resource
-    val errC: Channel<Throwable>
+    private val mutex = Mutex()
+
+    override var wants: Double = 0.0
+//        get() = runBlocking {
+//            this@Resource.mutex.lock(owner = this@Resource.id)
+//            try {
+//                return@runBlocking wants
+//            } finally {
+//                mutex.unlock(owner = this@Resource.id)
+//            }
+//        }
+//        private set(value) {
+//            wants = value
+//        }
+
+    override val capacity: ReceiveChannel<Double> = Channel()
+
+    override val lease: Doorman.Lease? = null
+
+
+    override suspend fun ask(requestedWants: Double): Throwable? {
+        if (requestedWants < 0) {
+            return IllegalArgumentException("Wants must be positive")
+        }
+        this.mutex.lock(owner = this.id)
+        this.wants = requestedWants
+        this.mutex.unlock(owner = this.id)
+        return null
+    }
+
+    override suspend fun release(): Throwable? {
+        val errorChan = Channel<Throwable>()
+        this.client.releaseResource.send(
+            object : IResourceAction {
+                override val resource: IResource = this@Resource
+                override val errC: Channel<Throwable> = errorChan
+            }
+        )
+        return errorChan.receiveCatching().getOrNull()
+    }
+
+    override suspend fun expiry(): Long {
+        return this.lease?.expiryTime ?: 0
+    }
 }

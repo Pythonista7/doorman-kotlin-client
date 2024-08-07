@@ -1,5 +1,6 @@
 package client
 
+import doorman.Doorman
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -8,15 +9,22 @@ import org.junit.jupiter.api.Test
 class RateLimiterTest {
     val control_capacity = Channel<Double>()
 
-    val fakeResource: Resource =
-        object : Resource {
+    val fakeResource: IResource =
+        object : IResource {
             override val id: String = "fake"
             override val wants: Double = 500.0
             override val capacity: ReceiveChannel<Double> = control_capacity
+            override val lease: Doorman.Lease?
+                get() = TODO("Not yet implemented")
+            override val client: DoormanClient
+                get() = TODO("Not yet implemented")
 
-            override suspend fun ask(capacity: Double): Result<Unit> = Result.success(Unit)
+            override suspend fun ask(capacity: Double): Throwable? = null
 
-            override suspend fun release(): Result<Unit> = Result.success(Unit)
+            override suspend fun release(): Throwable? = null
+            override suspend fun expiry(): Long {
+                TODO("Not yet implemented")
+            }
         }
 
     @Test

@@ -7,6 +7,7 @@ import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
+import kotlin.coroutines.cancellation.CancellationException
 
 private class TimerJob {
     private var timerJob: Job? = null
@@ -55,6 +56,9 @@ class DoormanClient(
     }
 
     val id: String = id
+
+    val resources: MutableMap<String, IResource> = mutableMapOf()
+
     private var master: String = "localhost"
     private var port: Int = 15000
 
@@ -68,12 +72,12 @@ class DoormanClient(
 
     private var rpcClient: CapacityGrpc.CapacityBlockingStub = CapacityGrpc.newBlockingStub(channel)
 
-    private val newResource: Channel<ResourceAction> = Channel()
-    private val releaseResource: Channel<ResourceAction> = Channel()
+    private val newResource: Channel<IResourceAction> = Channel()
+    val releaseResource: Channel<IResourceAction> = Channel()
 
     fun getMaster(): String = "$master:$port"
 
-    fun refreshMaster() {
+    private fun refreshMaster() {
         val discoveredMaster =
             discoverMaster()
                 ?: throw Exception("Could not discover master") // TODO: Log error and retain old rate limits ,throwing for now
@@ -108,6 +112,7 @@ class DoormanClient(
     // resources, and managing ones already claimed. This is the only
     // method that should be modifying the client's internal state and
     // performing RPCs.
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun run() {
         val wakeUp = Channel<Boolean>(1) // clientRefreshChannel
         var timerJob: TimerJob? = null
@@ -118,40 +123,48 @@ class DoormanClient(
                     newResource.onReceiveCatching { rA ->
                         {
                             println("[New Resource] Req to create resource $rA")
-                            val resourceAction = rA.getOrThrow()
-                            val err = addResource(resourceAction.resource)
-                            if (err != null)
+                            val resourceAction = rA.getOrNull()
+                            if (resourceAction == null)
                                 {
+                                    println("Error creating resource: ResourceAction is null!!!")
+                                } else {
+                                val err = addResource(resourceAction.resource)
+                                if (err != null) {
                                     CoroutineScope(Dispatchers.IO).launch {
                                         println("Error adding resource: $err")
                                         resourceAction.errC.send(err)
                                     }
                                 }
+                            }
                         }
                     }
 
                     releaseResource.onReceiveCatching { rA ->
                         {
                             println("[Release Resource] Req to release resource $rA")
-                            val resourceAction = rA.getOrThrow()
-                            val err = removeResource(resourceAction.resource)
-                            if (err != null)
-                                {
+                            val resourceAction: IResourceAction? = rA.getOrNull()
+                            if (resourceAction == null) {
+                                println("Error releasing resource: ResourceAction is null!!!")
+                            } else {
+                                val err = removeResource(resourceAction.resource)
+                                if (err != null) {
                                     CoroutineScope(Dispatchers.IO).launch {
                                         println("Error removing resource: $err")
                                         resourceAction.errC.send(err)
                                     }
                                 }
+                            }
                         }
                     }
 
                     wakeUp.onReceiveCatching {
                         println("[Wake Up] Waking up at ${System.currentTimeMillis()}")
-                        it.getOrThrow()
+                        it.getOrNull() ?: println("Got null in waking up channel instead of boolean!")
                         timerJob = null
                         return@onReceiveCatching 0
                     }
                 }
+
                 if (timerJob != null && timerJob!!.stopTimer()) {
                     while (wakeUp.isEmpty.not()) {
                         wakeUp.receive()
@@ -175,14 +188,55 @@ class DoormanClient(
         }
     }
 
-    private fun removeResource(resource: Resource): Throwable? = null
+    private fun addResource(resource: IResource): Throwable? {
+        if (resources.keys.contains(resource.id)) {
+            return DuplicateResourceError("Resource with id ${resource.id} already exists")
+        }
+        println("[Add Resource] Adding resource $resource")
+        resources[resource.id] = resource
+        return null
+    }
 
-    private fun addResource(resource: Resource): Throwable? = null
+    private fun removeResource(resource: IResource): Throwable? {
+        println("[Remove Resource] Removing resource $resource")
+        if (resources.keys.contains(resource.id).not()) {
+            return null
+        }
+        resources.remove(resource.id)
+        resource.capacity.cancel(CancellationException("Closing capacity as resource ${resource.id} is being removed"))
+
+        val releaseCapacityReq =
+            Doorman.ReleaseCapacityRequest
+                .newBuilder()
+                .setClientId(this.id)
+                .addResourceId(resource.id)
+                .build()
+
+        try {
+            val response = rpcClient.releaseCapacity(releaseCapacityReq)
+            println("Release Capacity Response: $response")
+            if(response.mastership.masterAddress == null) {
+                return MasterUnknownError("Master address is null in response")
+            }
+            if(response.mastership.masterAddress != getMaster()) {
+                refreshMaster()
+                // retry release
+                val retryResponse = rpcClient.releaseCapacity(releaseCapacityReq)
+                if (retryResponse.mastership.masterAddress != getMaster() || retryResponse.mastership.masterAddress == null) {
+                    return Exception("Master address mismatch after retry, expected ${getMaster()} but rpc says master is $retryResponse")
+                }
+            }
+        } catch (e: Exception) {
+            return e
+        }
+
+        return null
+    }
 
     /*
      * performRequests performs the actual RPCs to the server. It returns the interval in Milli and new retryCount
      */
-    private fun performRequests(retryCount: Int): Pair<Long, Int>  {
+    private fun performRequests(retryCount: Int): Pair<Long, Int> {
         println("[Perform Requests] Performing requests at ${System.currentTimeMillis()}")
         return Pair(1000, 0)
     }
