@@ -8,20 +8,23 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
 
-
 private class TimerJob {
     private var timerJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default)
 
-    fun startTimer(delayMillis: Long, action: suspend () -> Unit) {
+    fun startTimer(
+        delayMillis: Long,
+        action: suspend () -> Unit,
+    ) {
         timerJob?.cancel() // Cancel any existing timer
-        timerJob = scope.launch {
-            delay(delayMillis)
-            action()
-        }
+        timerJob =
+            scope.launch {
+                delay(delayMillis)
+                action()
+            }
     }
 
-    fun stopTimer():Boolean {
+    fun stopTimer(): Boolean {
         try {
             timerJob?.cancel()
             timerJob = null
@@ -30,30 +33,36 @@ private class TimerJob {
             println("Error stopping timer: $e")
             return false
         }
-
     }
 
-    fun isActive(): Boolean {
-        return timerJob?.isActive ?: false
-    }
+    fun isActive(): Boolean = timerJob?.isActive ?: false
 
     fun close() {
         stopTimer()
         scope.cancel()
     }
-
 }
 
-class DoormanClient {
+class DoormanClient(
+    id: String,
+) {
+    companion object {
+        fun create(id: String): DoormanClient = DoormanClient(id)
+    }
 
+    init {
+        CoroutineScope(Dispatchers.IO).launch { run() }
+    }
+
+    val id: String = id
     private var master: String = "localhost"
     private var port: Int = 15000
 
     private var channel: ManagedChannel =
-            ManagedChannelBuilder
-                .forAddress(master, port)
-                .usePlaintext()
-                .build()
+        ManagedChannelBuilder
+            .forAddress(master, port)
+            .usePlaintext()
+            .build()
 
     private var stop = false
 
@@ -62,13 +71,15 @@ class DoormanClient {
     private val newResource: Channel<ResourceAction> = Channel()
     private val releaseResource: Channel<ResourceAction> = Channel()
 
+    fun getMaster(): String = "$master:$port"
 
     fun refreshMaster() {
-        val discoveredMaster = discoverMaster()
-            ?: throw Exception("Could not discover master") // TODO: Log error and retain old rate limits ,throwing for now
+        val discoveredMaster =
+            discoverMaster()
+                ?: throw Exception("Could not discover master") // TODO: Log error and retain old rate limits ,throwing for now
 
         if (discoveredMaster.isMaster.not()) {
-            val newMaster  = discoveredMaster.mastership.masterAddress
+            val newMaster = discoveredMaster.mastership.masterAddress
             try {
                 master = newMaster.split(":")[0]
                 port = newMaster.split(":")[1].toInt()
@@ -78,10 +89,11 @@ class DoormanClient {
         }
 
         // register client with new master
-        channel = ManagedChannelBuilder
-            .forAddress(master, port)
-            .usePlaintext()
-            .build()
+        channel =
+            ManagedChannelBuilder
+                .forAddress(master, port)
+                .usePlaintext()
+                .build()
 
         rpcClient = CapacityGrpc.newBlockingStub(channel)
     }
@@ -103,36 +115,58 @@ class DoormanClient {
         try {
             while (!stop) {
                 select {
-                    newResource.onReceiveCatching {
-                        resourceAction -> {
-                            // TODO;
+                    newResource.onReceiveCatching { rA ->
+                        {
+                            println("[New Resource] Req to create resource $rA")
+                            val resourceAction = rA.getOrThrow()
+                            val err = addResource(resourceAction.resource)
+                            if (err != null)
+                                {
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        println("Error adding resource: $err")
+                                        resourceAction.errC.send(err)
+                                    }
+                                }
                         }
                     }
 
-                    releaseResource.onReceiveCatching {
-                        resourceAction -> {
-                            // TODO;
+                    releaseResource.onReceiveCatching { rA ->
+                        {
+                            println("[Release Resource] Req to release resource $rA")
+                            val resourceAction = rA.getOrThrow()
+                            val err = removeResource(resourceAction.resource)
+                            if (err != null)
+                                {
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        println("Error removing resource: $err")
+                                        resourceAction.errC.send(err)
+                                    }
+                                }
                         }
                     }
 
                     wakeUp.onReceiveCatching {
+                        println("[Wake Up] Waking up at ${System.currentTimeMillis()}")
+                        it.getOrThrow()
                         timerJob = null
                         return@onReceiveCatching 0
                     }
                 }
-                if (timerJob != null && timerJob!!.stopTimer() ) {
-                    while(wakeUp.isEmpty.not()){ wakeUp.receive() }
+                if (timerJob != null && timerJob!!.stopTimer()) {
+                    while (wakeUp.isEmpty.not()) {
+                        wakeUp.receive()
+                    }
                     timerJob = null
                 }
 
                 // var interval : Duration
-                val (interval, retryCount )= performRequests(retryCount)
+                val (interval, retryCount) = performRequests(retryCount)
 
                 timerJob = TimerJob()
                 timerJob!!.startTimer(
-                        delayMillis = interval,
-                        action = { wakeUp.send(true) }
-                    )
+                    delayMillis = interval,
+                    action = { wakeUp.send(true) },
+                )
             }
         } catch (e: Exception) {
             println("Error in run: $e")
@@ -141,7 +175,15 @@ class DoormanClient {
         }
     }
 
-    private fun performRequests(retryCount:Int) : Pair<Long, Int> {
+    private fun removeResource(resource: Resource): Throwable? = null
+
+    private fun addResource(resource: Resource): Throwable? = null
+
+    /*
+     * performRequests performs the actual RPCs to the server. It returns the interval in Milli and new retryCount
+     */
+    private fun performRequests(retryCount: Int): Pair<Long, Int>  {
+        println("[Perform Requests] Performing requests at ${System.currentTimeMillis()}")
         return Pair(1000, 0)
     }
 }
