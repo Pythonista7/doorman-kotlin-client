@@ -35,41 +35,52 @@ class RateLimiter(private val resource: Resource) {
 
     val isActive get() = scope.isActive
 
-    suspend fun wait(): Unit = try {
-        withContext(scope.coroutineContext) {
-            val response = Channel<Channel<Boolean>>()
-            events.send(response) // Tricky! This is a channel that is sent in the events channel
-            val unfreeze =
-                response.receive() // Tricky! This is the value received from the channel sent by the function generating events
+    suspend fun currentInterval(): Duration {
+        mutex.lock()
+        var iv : Duration = interval
+        mutex.unlock()
+        return iv
+    }
 
-            val job = this.coroutineContext.job
+    suspend fun wait(): Boolean {
+        return try {
+            withContext(scope.coroutineContext) {
+                val response = Channel<Channel<Boolean>>()
+                events.send(response) // Tricky! This is a channel that is sent in the events channel
+                val unfreeze =
+                    response.receive() // Tricky! This is the value received from the channel sent by the function generating events
 
-            select {
+                val job = this.coroutineContext.job
 
-                unfreeze.onReceiveCatching {
-                    it ->
-                    // val uf_item = uf.getOrNull() ?: throw uf.exceptionOrNull() ?: throw CancellationException("Unfreeze channel is closed")
-                    println("Received a value from the unfreeze channel")
-                    if (it.isClosed || it.isFailure) {
-                        println("Channel is closed ${it.isClosed} or failed ${it.isFailure}. This indicated that the rate limiter is closed.")
+                val success = select {
+
+                    unfreeze.onReceiveCatching { uf ->
+                        uf.getOrNull() ?: throw uf.exceptionOrNull() ?: throw CancellationException("Unfreeze channel is closed")
+                        println("Received a value from the unfreeze channel")
+                        if (unfreeze.isClosedForReceive) {
+                            println("Channel is closed , receive:${unfreeze.isClosedForReceive} , send:${unfreeze.isClosedForSend} or failed. This indicated that the rate limiter is closed.")
+                            false
+                        } else {
+                            println("Channel is open and waiting successful...")
+                            true
+                        }
+                    }
+
+                    job.onJoin {
+                        println("Job is joined")
                         false
-                    } else {
-                        println("Channel is open and waiting successful...")
-                        true
                     }
                 }
+                return@withContext success
 
-                job.onJoin {
-                    println("Job is joined")
-                    false
-                }
             }
-
+        } catch (ce: CancellationException) {
+            println("Cancellation exception caught: $ce")
+            return false
+        } catch (e: Exception) {
+            println("Generic Exception caught: $e")
+            return false
         }
-    } catch (ce: CancellationException) {
-        println("Cancellation exception caught: $ce")
-    } catch (e: Exception) {
-        println("Generic Exception caught: $e")
     }
 
     suspend fun close() {
