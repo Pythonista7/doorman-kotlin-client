@@ -16,7 +16,7 @@ class RateLimiterTest {
             override val priority: Long = 0
             override var lease: Doorman.Lease? = null
             override val client: DoormanClient
-                get() = TODO("Not yet implemented")
+                get() = DoormanClient.create("fake")
 
             override suspend fun ask(capacity: Double): Throwable? = null
 
@@ -110,9 +110,4 @@ class RateLimiterTest {
             assert( successMap["PT0.1S"]?.size!! >= 25) // Ideally should be 30, 10 RPS for 3 seconds
             assert( successMap["PT0.05S"]?.size!! >= 50) // Ideally should be 60, 20 RPS for 3 seconds
         }
-
-    @Test
-    fun `test with actual doorman resource`() {
-        val resource = null // TODO: Create a doorman resource
-    }
 }
