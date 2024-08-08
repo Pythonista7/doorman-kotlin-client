@@ -3,7 +3,6 @@ package client
 import doorman.Doorman
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
 import org.junit.jupiter.api.Test
 
 class RateLimiterTest {
@@ -13,9 +12,9 @@ class RateLimiterTest {
         object : IResource {
             override val id: String = "fake"
             override val wants: Double = 500.0
-            override val capacity: ReceiveChannel<Double> = control_capacity
-            override val lease: Doorman.Lease?
-                get() = TODO("Not yet implemented")
+            override val capacity: Channel<Double> = control_capacity
+            override val priority: Long = 0
+            override var lease: Doorman.Lease? = null
             override val client: DoormanClient
                 get() = TODO("Not yet implemented")
 

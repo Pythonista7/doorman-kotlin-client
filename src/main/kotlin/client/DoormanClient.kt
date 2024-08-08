@@ -1,5 +1,6 @@
 package client
 
+import client.Utils.Companion.backoff
 import doorman.CapacityGrpc
 import doorman.Doorman
 import io.grpc.ManagedChannel
@@ -8,6 +9,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 private class TimerJob {
     private var timerJob: Job? = null
@@ -43,6 +47,8 @@ private class TimerJob {
         scope.cancel()
     }
 }
+
+const val MIN_REFRESH_INTERVAL = 100
 
 class DoormanClient(
     id: String,
@@ -238,6 +244,85 @@ class DoormanClient(
      */
     private fun performRequests(retryCount: Int): Pair<Long, Int> {
         println("[Perform Requests] Performing requests at ${System.currentTimeMillis()}")
-        return Pair(1000, 0)
+
+        // Create a get capacity request
+        val getCapacityReq = Doorman.GetCapacityRequest.newBuilder().setClientId(this.id)
+
+        for(r in resources.values) {
+            getCapacityReq.addResource(
+                Doorman.ResourceRequest
+                    .newBuilder()
+                    .setResourceId(r.id)
+                    .setPriority(r.priority)
+                    .setWants(r.wants)
+                    .setHas(r.lease)
+                    .build()
+            )
+        }
+
+        if(retryCount > 0) {
+            println("[Perform Requests] Retrying with retryCount $retryCount for $getCapacityReq")
+        }
+
+        val capacityResponse = try {
+            rpcClient.getCapacity(getCapacityReq.build())
+        } catch (e: Exception) {
+            println("Error getting capacity: $e")
+            // Expired resources only need to be handled if the
+            // RPC failed: otherwise the client has gotten a
+            // refreshed lease.
+            for (r in resources.values) {
+                if (r.lease != null && r.lease!!.expiryTime < System.currentTimeMillis()) {
+                    CoroutineScope(Dispatchers.IO).launch{
+                        println("[Perform Requests] Resource ${r.id} has expired, releasing by setting capacity to 0.")
+                        r.capacity.send(0.0)
+                        println("[Perform Requests] Resource ${r.id} has been released on expiry.")
+                    }
+                }
+            }
+            val bkOff =  backoff(
+                baseDelay = 1.seconds, // TODO: Make this configurable
+                maxDelay = 10.minutes, // TODO: Make this configurable
+                retries = retryCount + 1
+            )
+            return Pair(bkOff,retryCount + 1)
+        }
+
+        // update client state with the response capacity and lease;
+        for(r in capacityResponse.responseList) {
+            val clientResource = this.resources[r.resourceId]
+            if (clientResource == null){
+                println("ERROR [Perform Requests] Resource ${r.resourceId} not found in client resources")
+                continue
+            }
+            val oldCapacity:Double = clientResource.lease?.capacity ?: -1.0
+
+            // update lease
+            clientResource.lease = r.gets
+
+            // Only send a message down the channel if the capacity has changed.
+            if(oldCapacity != r.gets.capacity) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    println("[Perform Requests] Sending capacity update for ${r.resourceId}, from $oldCapacity to ${r.gets.capacity}")
+                    clientResource.capacity.send(r.gets.capacity)
+                    println("[Perform Requests] Capacity update sent for ${r.resourceId} , $oldCapacity -> ${r.gets.capacity}")
+                }
+            }
+        }
+
+        // Figure out refresh interval, find the minimum refresh interval
+        var interval = 15.minutes // some long duration which should get overwritten
+        for( r in capacityResponse.responseList) {
+            val refresh = r?.gets?.refreshInterval?.milliseconds ?: 0.milliseconds
+            if(refresh < interval) {
+                interval = refresh
+            }
+        }
+
+        if(interval.inWholeMilliseconds < MIN_REFRESH_INTERVAL) {
+            interval = MIN_REFRESH_INTERVAL.milliseconds
+        }
+
+        return Pair(interval.inWholeMilliseconds, 0)
     }
 }

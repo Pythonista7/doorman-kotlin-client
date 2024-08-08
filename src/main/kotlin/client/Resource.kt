@@ -2,7 +2,6 @@ package client
 
 import doorman.Doorman
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.sync.Mutex
 
 class Resource(override val id: String, override val client: DoormanClient) : IResource {
@@ -22,9 +21,11 @@ class Resource(override val id: String, override val client: DoormanClient) : IR
 //            wants = value
 //        }
 
-    override val capacity: ReceiveChannel<Double> = Channel()
+    override val capacity: Channel<Double> = Channel()
 
-    override val lease: Doorman.Lease? = null
+    override val priority: Long = 0
+
+    override var lease: Doorman.Lease? = null
 
 
     override suspend fun ask(requestedWants: Double): Throwable? {
