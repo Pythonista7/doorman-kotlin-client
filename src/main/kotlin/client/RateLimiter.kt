@@ -45,9 +45,8 @@ class RateLimiter(private val resource: IResource) {
         return try {
             withContext(scope.coroutineContext) {
                 val response = Channel<Channel<Boolean>>()
-                events.trySend(response) // Tricky! This is a channel that is sent in the events channel
-                val unfreeze =
-                    response.receive() // Tricky! This is the value received from the channel sent by the function generating events
+                events.send(response) // Tricky! This is a channel that is sent in the events channel
+                val unfreeze = response.receive() // Tricky! This is the value received from the channel sent by the function generating events
 
                 val job = this.coroutineContext.job
 
@@ -83,7 +82,6 @@ class RateLimiter(private val resource: IResource) {
     }
 
     suspend fun close() {
-        println("[RL ${resource.id}] [Rate-limiter Close] Closing RateLimiter on resource ${resource.id} for client ${resource.client.id}")
         this.scope.coroutineContext.job.cancelAndJoin()
     }
 
@@ -149,7 +147,7 @@ class RateLimiter(private val resource: IResource) {
             val wakeUp = Channel<Boolean>()
             println("[RL: ${resource.id}] [Run Loop ts: ${System.currentTimeMillis()}] isBlocked: $isBlocked, isUnlimited: $isUnlimited, rate: $rate, interval: $interval, subintervals: $subintervals, released: $released, leftoverRate: $leftoverRate")
             if (isBlocked.not() && isUnlimited.not()) {
-                CoroutineScope(Dispatchers.IO).launch {
+                scope.launch {
                     println("[RL: ${resource.id}] [Sleep-Start] Sleep starts for $interval at ${System.currentTimeMillis()}")
                     delay(interval.toMillis())
                     println("[RL: ${resource.id}] [Sleep-End] Waking up after $interval at ${System.currentTimeMillis()}")
@@ -160,13 +158,13 @@ class RateLimiter(private val resource: IResource) {
 
             select {
 
-                resource.capacity.onReceiveCatching {
-                    c ->
-                    val capacity = c.getOrNull()
-                    if(capacity == null) {
-                        println("[ERROR] [RL ${resource.id}] : Received capacity is null")
-                        return@onReceiveCatching 0
-                    }
+                resource.capacity.onReceive {
+                    capacity ->
+//                    val capacity = c.getOrNull()
+//                    if(capacity == null) {
+//                        println("[ERROR] [RL ${resource.id}] : Received capacity is null")
+//                        return@onReceiveCatching 0
+//                    }
                     println("[RL ${resource.id}] Received capacity: $capacity for resource: ${resource.id}")
                     // Updates rate and interval according to received capacity value from doorman
                     leftoverRateOriginal = updateRate(capacity)
@@ -175,7 +173,7 @@ class RateLimiter(private val resource: IResource) {
                     released = 0
                     leftoverRate = leftoverRateOriginal
                     println("[RL ${resource.id}] Received capacity: $capacity for resource: ${resource.id} , Rate: $rate, Interval: $interval, Subintervals: $subintervals, Released: $released, LeftoverRate: $leftoverRate")
-                    return@onReceiveCatching 0
+                    return@onReceive 0
                 }
 
                 events.onReceive {
@@ -211,10 +209,10 @@ class RateLimiter(private val resource: IResource) {
 
                     for(i in 0 until max) {
                         select {
-                            unfreeze.onSend(true) {
+                            unfreeze.onSend(true) { it->
                                 // We managed to release a goroutine
                                 // waiting on the other side of the channel.
-                                println("[RL: ${resource.id}] Released a coroutine")
+                                println("[RL: ${resource.id}] UnfreezeSend, Released a coroutine : $it")
                             }
                             // default:
                             // We failed to send value through channel, so nobody
