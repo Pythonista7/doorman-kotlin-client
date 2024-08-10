@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test
 class DoormanClientTest {
 
     @Test
-    fun `test with actual doorman resource`(): Unit = runBlocking {
+    fun `test with actual doorman resource`(): Unit = runBlocking(CoroutineName("ash-test-3")) {
         val client = DoormanClient.create("apple-client")
         val fResourceApples = client.requestResource("proportional",10.0)
         println("Resource created: $fResourceApples")

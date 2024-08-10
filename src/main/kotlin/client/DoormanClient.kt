@@ -8,6 +8,8 @@ import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.selects.selectUnbiased
+import kotlinx.coroutines.selects.whileSelect
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
@@ -55,7 +57,7 @@ class DoormanClient private constructor(
     id: String,
 ) {
     private val job = SupervisorJob()
-    private val scope = CoroutineScope(Dispatchers.IO + job)
+    private val scope = CoroutineScope(Dispatchers.IO + job + CoroutineName("ClientSupervisor"))
     companion object {
         fun create(id: String): DoormanClient {
             val c = DoormanClient(id)
@@ -84,11 +86,11 @@ class DoormanClient private constructor(
 
     private var rpcClient: CapacityGrpc.CapacityBlockingStub = CapacityGrpc.newBlockingStub(channel)
 
-    private val newResource: Channel<IResourceAction> = Channel<IResourceAction>(2)
-    val releaseResource: Channel<IResourceAction> = Channel<IResourceAction>(2)
+    private val newResource: Channel<IResourceAction> = Channel<IResourceAction>()
+    val releaseResource: Channel<IResourceAction> = Channel<IResourceAction>()
 
     init {
-        scope.launch { run() }
+        CoroutineScope(Dispatchers.Default + job).launch(CoroutineName("ClientRunLoop")) { run() }
     }
     fun getMaster(): String = "$master:$port"
 
@@ -99,33 +101,38 @@ class DoormanClient private constructor(
 
     suspend fun requestResourceWithPriority(id:String, capacity: Double, priority:Long): Resource {
         val resource = Resource(id = id, client = this, wants = capacity, priority = priority)
-        val errC: Channel<Throwable?> = Channel()
+        val errC: Channel<Throwable?> = Channel(onUndeliveredElement = { e -> println("[ERROR] Error in errC: $e") })
 
-        val newResourceAction : IResourceAction = object : IResourceAction {
-            override val errC: Channel<Throwable?> = errC
-            override val resource: IResource = resource
-        }
-        println("[Client ${this.id}][Request Resource] Sending request at ${System.currentTimeMillis()} for resource $id with capacity $capacity")
-        val sendRes = newResource.trySend(newResourceAction)
+//        val debugTicker = ticker(500)
+//        var loop = true
 
-        println("[Client ${this.id}][Request Resource] Waiting for errC, Sent request for resource $id with capacity $capacity with response: $sendRes")
-        return select {
-            errC.onReceiveCatching() {
-                println("[Client ${this@DoormanClient.id}][Request Resource] Received errC, Sent request for resource $id with capacity $capacity")
-                val err = it.getOrNull()
-                if (err != null) throw Exception("Error creating resource $id with capacity $capacity: $err")
-                else {return@onReceiveCatching resource}
-//                it.onSuccess {
-//                    println("[Client ${this@DoormanClient.id}][Request Resource] Resource $id with capacity $capacity created successfully")
-//                    // return@onReceiveCatching resource
-//                }.onFailure { it ->
-//                    println("[Client ${this@DoormanClient.id}][Request Resource] Error creating resource $id with capacity $capacity: $it")
-//                    throw Exception("Error creating resource $id with capacity $capacity: $it")
-//                }.onClosed {
-//                    throw Exception("Channel closed while creating resource $id with capacity $capacity: $it")
+        val newResourceAction = ResourceAction(resource,errC)
+
+        println("[Client ${this.id}][Request Resource] Sending request for resource $id with capacity $capacity on channel")
+        val sendRes = newResource.send(newResourceAction)
+        println("[Client ${this.id}][Request Resource][ts: ${System.currentTimeMillis()}] Sent request for resource $id with capacity $capacity, now waiting for res creation errorChan.")
+//        while(loop) {
+//            select<Unit?> {
+//                errC.onReceive {
+//                    println("[Client ${this@DoormanClient.id}][Request Resource] Received errC, Sent request for resource $id with capacity $capacity")
+//                    val err = it
+//                    if (err != null) throw Exception("Error creating resource $id with capacity $capacity: $err")
+//                    else {
+//                        // return@onReceiveCatching resource
+//                        loop = false
+//                    }
 //                }
-            }
-        }
+//
+//                debugTicker.onReceiveCatching {
+//                    it.getOrNull()
+//                    println("[Client ${this@DoormanClient.id}][Request Resource][ts: ${System.currentTimeMillis()}] Waiting for errC to receive error for resource $id with capacity $capacity")
+//                    null
+//                }
+//            }
+//        }
+        val errCRes = errC.receive()
+        println("[Client][Request Resource][ts: ${System.currentTimeMillis()}] Received errC, request for resource $id with capacity $capacity")
+        if(errCRes == null) return resource else throw Exception("Error creating resource $id with capacity $capacity: $errCRes")
     }
 
     fun close() {
@@ -184,24 +191,23 @@ class DoormanClient private constructor(
         var retryCount = 0
         try {
             while (!stop) {
+                selectUnbiased {
 
-                select {
-
-                    newResource.onReceiveCatching { rA ->
+                    newResource.onReceive { rA ->
                         {
                             println("[Client ${this@DoormanClient.id}] [New Resource] Req to create resource $rA")
-                            val resourceAction = rA.getOrNull()
+                            val resourceAction = rA // .getOrNull()
                             if (resourceAction == null) {
                                 println("[Client ${this@DoormanClient.id}] Error creating resource: ResourceAction is null!!!")
                             } else {
                                 val err = addResource(resourceAction.resource)
                                 if (err != null) {
-                                    CoroutineScope(Dispatchers.IO).launch {
+                                    scope.launch {
                                         println("[Client ${this@DoormanClient.id}] Error adding resource: $err")
                                         resourceAction.errC.send(err)
                                     }
                                 } else {
-                                    CoroutineScope(Dispatchers.IO).launch{ resourceAction.errC.send(null) }
+                                    scope.launch{ resourceAction.errC.send(null) }
                                 }
                             }
                         }
@@ -216,12 +222,12 @@ class DoormanClient private constructor(
                             } else {
                                 val err = removeResource(resourceAction.resource)
                                 if (err != null) {
-                                    CoroutineScope(Dispatchers.IO).launch {
+                                    scope.launch {
                                         println("[Client ${this@DoormanClient.id}] Error removing resource: $err")
                                         resourceAction.errC.send(err)
                                     }
                                 } else {
-                                    CoroutineScope(Dispatchers.IO).launch{ resourceAction.errC.send(null) }
+                                    scope.launch{ resourceAction.errC.send(null) }
                                 }
                             }
                         }
@@ -251,7 +257,7 @@ class DoormanClient private constructor(
                 interval = newInterval
                 retryCount = newRetryCount
 
-                println("[Client ${this.id}] Looping run() at ${System.currentTimeMillis()}, stop = $stop , isClosedForReceive:${newResource.isClosedForReceive}")
+                println("[Client ${this.id}] Looping run() at ${System.currentTimeMillis()}, stop = $stop ")
                 timerJob = TimerJob()
                 timerJob!!.startTimer(
                     delayMillis = interval,
