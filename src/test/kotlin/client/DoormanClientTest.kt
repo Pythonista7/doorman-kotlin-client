@@ -6,6 +6,30 @@ import org.junit.jupiter.api.Test
 class DoormanClientTest {
 
     @Test
+    fun `clientInitTest`(){
+        val client = DoormanClient.create("test-client")
+        println("Client created: $client")
+        client.close()
+    }
+
+    @Test
+    fun `resourceInitTest`(){
+        val resource = Resource("test-resource")
+        println("Resource created: $resource")
+    }
+
+    @Test
+    fun `addResourceWithClientTest`(): Unit = runBlocking(CoroutineName("ash-test-1")) {
+        val client = DoormanClient.create("test-client")
+        println("Client created: $client")
+        client.requestResource("test-resource", 10.0)
+        println("Resource created: test-resource")
+        client.close()
+    }
+
+
+
+    @Test
     fun `test with actual doorman resource`(): Unit = runBlocking(CoroutineName("ash-test-3")) {
         val client = DoormanClient.create("apple-client")
         val fResourceApples = client.requestResource("proportional",10.0)

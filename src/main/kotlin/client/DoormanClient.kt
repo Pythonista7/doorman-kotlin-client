@@ -14,40 +14,6 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-private class TimerJob {
-    private var timerJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Default)
-
-    fun startTimer(
-        delayMillis: Long,
-        action: suspend () -> Unit,
-    ) {
-        timerJob?.cancel() // Cancel any existing timer
-        timerJob =
-            scope.launch {
-                delay(delayMillis)
-                action()
-            }
-    }
-
-    fun stopTimer(): Boolean {
-        try {
-            timerJob?.cancel()
-            timerJob = null
-            return true
-        } catch (e: Exception) {
-            println("Error stopping timer: $e")
-            return false
-        }
-    }
-
-    fun isActive(): Boolean = timerJob?.isActive ?: false
-
-    fun close() {
-        stopTimer()
-        scope.cancel()
-    }
-}
 
 const val MIN_REFRESH_INTERVAL = 20L
 
@@ -56,7 +22,29 @@ class DoormanClient private constructor(
 ) {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + job + CoroutineName("ClientSupervisor"))
+    private val id: String = id
+
     companion object {
+
+        val resources: MutableMap<String, IResource> = mutableMapOf()
+
+        private var master: String = "localhost"
+        private var port: Int = 15000
+
+        private var channel: ManagedChannel =
+            ManagedChannelBuilder
+                .forAddress(master, port)
+                .usePlaintext()
+                .build()
+
+        private var rpcClient: CapacityGrpc.CapacityBlockingStub = CapacityGrpc.newBlockingStub(channel)
+
+        @JvmStatic
+        private val newResource: Channel<ResourceAction> = Channel<ResourceAction>()
+
+
+        val releaseResource: Channel<ResourceAction> = Channel<ResourceAction>()
+
         fun create(id: String): DoormanClient {
             val c = DoormanClient(id)
             return c
@@ -64,31 +52,8 @@ class DoormanClient private constructor(
 
     }
 
-    val id: String = id
-
-//    private var ready = false
-//    private var readyChannel = Channel<Boolean>(1)
-
-    val resources: MutableMap<String, IResource> = mutableMapOf()
-
-    private var master: String = "localhost"
-    private var port: Int = 15000
-
-    private var channel: ManagedChannel =
-        ManagedChannelBuilder
-            .forAddress(master, port)
-            .usePlaintext()
-            .build()
-
-    private var stop = false
-
-    private var rpcClient: CapacityGrpc.CapacityBlockingStub = CapacityGrpc.newBlockingStub(channel)
-
-    private val newResource: Channel<IResourceAction> = Channel<IResourceAction>()
-    val releaseResource: Channel<IResourceAction> = Channel<IResourceAction>()
-
     init {
-        CoroutineScope(Dispatchers.Default + job).launch(CoroutineName("ClientRunLoop")) { run() }
+        CoroutineScope(Dispatchers.Unconfined + job).launch(CoroutineName("ClientRunLoop")) { run() }
     }
     fun getMaster(): String = "$master:$port"
 
@@ -98,54 +63,30 @@ class DoormanClient private constructor(
     }
 
     suspend fun requestResourceWithPriority(id:String, capacity: Double, priority:Long): Resource {
-        val resource = Resource(id = id, client = this, wants = capacity, priority = priority)
+        val resource = Resource(id = id, wants = capacity, priority = priority)
         val errC: Channel<Throwable?> = Channel(onUndeliveredElement = { e -> println("[ERROR] Error in errC: $e") })
-
-//        val debugTicker = ticker(500)
-//        var loop = true
 
         val newResourceAction = ResourceAction(resource,errC)
 
-        println("[Client ${this.id}][Request Resource] Sending request for resource $id with capacity $capacity on channel")
-        val sendRes = newResource.send(newResourceAction)
-        println("[Client ${this.id}][Request Resource][ts: ${System.currentTimeMillis()}] Sent request for resource $id with capacity $capacity, now waiting for res creation errorChan.")
-//        while(loop) {
-//            select<Unit?> {
-//                errC.onReceive {
-//                    println("[Client ${this@DoormanClient.id}][Request Resource] Received errC, Sent request for resource $id with capacity $capacity")
-//                    val err = it
-//                    if (err != null) throw Exception("Error creating resource $id with capacity $capacity: $err")
-//                    else {
-//                        // return@onReceiveCatching resource
-//                        loop = false
-//                    }
-//                }
-//
-//                debugTicker.onReceiveCatching {
-//                    it.getOrNull()
-//                    println("[Client ${this@DoormanClient.id}][Request Resource][ts: ${System.currentTimeMillis()}] Waiting for errC to receive error for resource $id with capacity $capacity")
-//                    null
-//                }
-//            }
-//        }
+        newResource.send(newResourceAction)
+        println("[Client ${this.id}][Request Resource][ts: ${System.currentTimeMillis()}] Sent request for resource $id with capacity $capacity, now waiting for res creation errorChan")
         val errCRes = errC.receive()
         println("[Client][Request Resource][ts: ${System.currentTimeMillis()}] Received errC, request for resource $id with capacity $capacity")
         if(errCRes == null) return resource else throw Exception("Error creating resource $id with capacity $capacity: $errCRes")
     }
 
     fun close() {
-        this.newResource.close(Throwable("Client ${this.id} is closing"))
-        this.releaseResource.close(Throwable("Client ${this.id} is closing"))
-        this.stop = true
+        newResource.close()
+        releaseResource.close()
         // Release all held resources
         val releaseCapacityReq = Doorman.ReleaseCapacityRequest.newBuilder().setClientId(this.id)
-        for(r in this.resources.values) {
+        for(r in resources.values) {
             releaseCapacityReq.addResourceId(r.id)
-            r.capacity.close(Throwable("Client ${this.id} is closing"))
+            r.capacity.close()
         }
-        val releaseRes = rpcClient.releaseCapacity(releaseCapacityReq.build())
-        println("[Client ${this.id} Close] Release Capacity Response: $releaseRes")
-        this.channel.shutdown()
+        if(channel.isShutdown.not()) {
+            channel.shutdown()
+        }
     }
 
     private fun refreshMaster() {
@@ -175,7 +116,7 @@ class DoormanClient private constructor(
 
     private fun discoverMaster(): Doorman.DiscoveryResponse? {
         val discoveryRequest = Doorman.DiscoveryRequest.newBuilder().build()
-        val discoverResponse = this.rpcClient.discovery(discoveryRequest)
+        val discoverResponse = rpcClient.discovery(discoveryRequest)
         return discoverResponse
     }
 
@@ -184,17 +125,17 @@ class DoormanClient private constructor(
     // resources, and managing ones already claimed. This is the only
     // method that should be modifying the client's internal state and
     // performing RPCs.
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(ExperimentalCoroutinesApi::class, ObsoleteCoroutinesApi::class)
     private suspend fun run() {
-        val wakeUp = Channel<Boolean>(1) // clientRefreshChannel
-        var timerJob: TimerJob? = null
         var retryCount = 0
+         var wakeUp = ticker(1000)
         try {
-            while (!stop) {
+            println("[Client ${this.id}] Starting run loop")
+            while (true) {
+                println("[Client ${this.id}] Selecting in run loop")
                 select {
-
                     newResource.onReceive { rA ->
-                        {
+                        try {
                             println("[Client ${this@DoormanClient.id}] [New Resource] Req to create resource $rA")
                             val resourceAction = rA // .getOrNull()
                             if (resourceAction == null) {
@@ -210,46 +151,41 @@ class DoormanClient private constructor(
                                     scope.launch{ resourceAction.errC.send(null) }
                                 }
                             }
+                        } catch (e: Exception) {
+                            rA.errC.send(e)
                         }
                     }
 
-                    releaseResource.onReceiveCatching { rA ->
-                        {
+                    releaseResource.onReceive { rA ->
+                        try {
                             println("[Client ${this@DoormanClient.id}] [Release Resource] Req to release resource $rA")
-                            val resourceAction: IResourceAction? = rA.getOrNull()
-                            if (resourceAction == null) {
-                                println("[Client ${this@DoormanClient.id}] Error releasing resource: ResourceAction is null!!!")
-                            } else {
-                                val err = removeResource(resourceAction.resource)
-                                if (err != null) {
-                                    scope.launch {
-                                        println("[Client ${this@DoormanClient.id}] Error removing resource: $err")
-                                        resourceAction.errC.send(err)
-                                    }
-                                } else {
-                                    scope.launch{ resourceAction.errC.send(null) }
+                            val resourceAction: ResourceAction = rA
+
+                            val err = removeResource(resourceAction.resource)
+                            if (err != null) {
+                                scope.launch {
+                                    println("[Client ${this@DoormanClient.id}] Error removing resource: $err")
+                                    resourceAction.errC.send(err)
                                 }
+                            } else {
+                                scope.launch{ resourceAction.errC.send(null) }
                             }
+
+                        } catch (e: Exception) {
+                            rA.errC.send(e)
                         }
                     }
 
                     wakeUp.onReceiveCatching {
                         it.getOrNull() ?: println("[Client ${this@DoormanClient.id}] Got null in waking up channel instead of boolean!")
-                        timerJob = null
                         return@onReceiveCatching 0
                     }
                 }
 
-                if (timerJob != null && timerJob!!.stopTimer()) {
-                    while (wakeUp.isEmpty.not()) {
-                        wakeUp.receive()
-                    }
-                    timerJob = null
-                }
 
                 var interval : Long
                 // println("[Client $id] Run Loop at ${System.currentTimeMillis()} performing requests...")
-                val (newInterval, newRetryCount) = if(this.resources.isEmpty().not()) {
+                val (newInterval, newRetryCount) = if(resources.isEmpty().not()) {
                     performRequests(retryCount)
                 } else {
                     Pair(MIN_REFRESH_INTERVAL.toLong(),retryCount)
@@ -257,12 +193,10 @@ class DoormanClient private constructor(
                 interval = newInterval
                 retryCount = newRetryCount
 
-                println("[Client ${this.id}] Looping run() at ${System.currentTimeMillis()}, stop = $stop ")
-                timerJob = TimerJob()
-                timerJob!!.startTimer(
-                    delayMillis = interval,
-                    action = { wakeUp.send(true) },
-                )
+                wakeUp.cancel()
+                wakeUp = ticker(interval)
+
+                println("[Client ${this.id}] Looping run() at ${System.currentTimeMillis()}")
             }
         } catch (e: Exception) {
             println("[Client ${this@DoormanClient.id}] Error in run: $e")
@@ -374,7 +308,7 @@ class DoormanClient private constructor(
 
         // update client state with the response capacity and lease;
         for(r in capacityResponse.responseList) {
-            val clientResource = this.resources[r.resourceId]
+            val clientResource = resources[r.resourceId]
             if (clientResource == null){
                 println("ERROR [$id : Perform Requests] Resource ${r.resourceId} not found in client resources")
                 continue

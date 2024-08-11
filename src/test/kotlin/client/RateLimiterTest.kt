@@ -15,9 +15,6 @@ class RateLimiterTest {
             override val capacity: Channel<Double> = control_capacity
             override val priority: Long = 0
             override var lease: Doorman.Lease? = null
-            override val client: DoormanClient
-                get() = TODO()
-
             override suspend fun ask(capacity: Double): Throwable? = null
 
             override suspend fun release(): Throwable? = null

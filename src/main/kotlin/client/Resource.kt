@@ -6,24 +6,12 @@ import kotlinx.coroutines.sync.Mutex
 
 class Resource(
     override val id: String,
-    override val client: DoormanClient,
     wants: Double = 0.0,
     priority: Long = 0,
 ) : IResource {
     private val mutex = Mutex()
 
     override var wants: Double = wants
-//        get() = runBlocking {
-//            this@Resource.mutex.lock(owner = this@Resource.id)
-//            try {
-//                return@runBlocking wants
-//            } finally {
-//                mutex.unlock(owner = this@Resource.id)
-//            }
-//        }
-//        private set(value) {
-//            wants = value
-//        }
 
     override val capacity: Channel<Double> = Channel()
 
@@ -43,11 +31,8 @@ class Resource(
 
     override suspend fun release(): Throwable? {
         val errorChan = Channel<Throwable?>()
-        this.client.releaseResource.send(
-            object : IResourceAction {
-                override val resource: IResource = this@Resource
-                override val errC: Channel<Throwable?> = errorChan
-            },
+        DoormanClient.releaseResource.send(
+            ResourceAction(resource = this@Resource ,errC = errorChan)
         )
         return errorChan.receiveCatching().getOrNull()
     }

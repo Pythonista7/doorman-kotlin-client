@@ -12,7 +12,7 @@ interface IResource {
 
     var lease: Doorman.Lease?
 
-    val client: DoormanClient
+    // val client: DoormanClient
     suspend fun ask(capacity: Double): Throwable?
     suspend fun release(): Throwable?
 
