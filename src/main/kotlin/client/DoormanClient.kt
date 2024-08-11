@@ -8,9 +8,7 @@ import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
-import kotlinx.coroutines.selects.selectUnbiased
-import kotlinx.coroutines.selects.whileSelect
-import kotlin.coroutines.CoroutineContext
+
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -181,17 +179,19 @@ class DoormanClient private constructor(
         return discoverResponse
     }
 
+
     // run is the client's main loop. It takes care of requesting new
     // resources, and managing ones already claimed. This is the only
     // method that should be modifying the client's internal state and
     // performing RPCs.
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun run() {
         val wakeUp = Channel<Boolean>(1) // clientRefreshChannel
         var timerJob: TimerJob? = null
         var retryCount = 0
         try {
             while (!stop) {
-                selectUnbiased {
+                select {
 
                     newResource.onReceive { rA ->
                         {
@@ -411,6 +411,6 @@ class DoormanClient private constructor(
 
         return Pair(interval.inWholeMilliseconds, 0)
     }
-
-
 }
+
+
