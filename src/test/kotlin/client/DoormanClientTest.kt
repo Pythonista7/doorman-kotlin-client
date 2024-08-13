@@ -2,6 +2,8 @@ package client
 
 import kotlinx.coroutines.*
 import org.junit.jupiter.api.Test
+import java.time.ZonedDateTime
+import kotlin.concurrent.timerTask
 
 class DoormanClientTest {
 
@@ -50,6 +52,34 @@ class DoormanClientTest {
         val result = appleRateLimiter.wait()
         println("Wait: $result , Time taken: ${(System.currentTimeMillis() - start)/1000.00} seconds") // Should be around 100ms as we are waiting to manage a rate of 10 RPS
         assert(System.currentTimeMillis() - start < 250)
+    }
+
+    @Test
+    fun `Test enforced ratelimit`() = runBlocking {
+        val client = DoormanClient.create("example-client")
+        val resourceApples = client.requestResource("apples",10.0)
+        val rateLimit = RateLimiter(resourceApples)
+
+        val endTime = System.currentTimeMillis() + 7000
+
+        var count = 0
+
+        // Tracker coroutine to keep track of the requests made every second
+        val scope = CoroutineScope(this.coroutineContext).launch {
+            while (true) {
+                delay(1000)
+                println("[Tracker] Total requests made: $count at ${ZonedDateTime.now()}")
+            }
+        }
+
+        while(System.currentTimeMillis() < endTime) {
+            rateLimit.wait()
+            count ++
+            // current time in human-readable form
+            println("Accessing resource `Apples` at ${ZonedDateTime.now()}")
+        }
+
+        scope.cancelAndJoin() // close the tracker coroutine.
     }
 
 
