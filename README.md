@@ -1,6 +1,7 @@
 # Kotlin Doorman Client
 
-This is a Kotlin client for the [Doorman](https://github.com/Pythonista7/doorman) service which allows voluntary client-side rate limiting.
+This is a Kotlin client for the [Doorman](https://github.com/Pythonista7/doorman) service which allows voluntary client-side rate limiting. The big idea can be captured in this image:
+![Doorman](https://github.com/Pythonista7/doorman/blob/master/doc/loadtest/overview.png)
 This implementation is based on the [Go Client](https://github.com/Pythonista7/doorman/blob/master/go/client/doorman/client.go) from the Doorman project, hence the bugs/limitation of the Go client are also present in this implementation at the moment.
 
 
