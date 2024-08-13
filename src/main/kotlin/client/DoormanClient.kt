@@ -75,9 +75,10 @@ class DoormanClient private constructor(
         if(errCRes == null) return resource else throw Exception("Error creating resource $id with capacity $capacity: $errCRes")
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun close() {
-        newResource.close()
-        releaseResource.close()
+        if(newResource.isClosedForSend.not()) newResource.close()
+        if(releaseResource.isClosedForSend.not()) releaseResource.close()
         // Release all held resources
         val releaseCapacityReq = Doorman.ReleaseCapacityRequest.newBuilder().setClientId(this.id)
         for(r in resources.values) {
@@ -196,10 +197,10 @@ class DoormanClient private constructor(
                 wakeUp.cancel()
                 wakeUp = ticker(interval)
 
-                println("[Client ${this.id}] Looping run() at ${System.currentTimeMillis()}")
+                // println("[Client ${this.id}] Looping run() at ${System.currentTimeMillis()}")
             }
         } catch (e: Exception) {
-            println("[Client ${this@DoormanClient.id}] Error in run: $e")
+            println("[Client ${this@DoormanClient.id}] Error in run: $e , stacktrace: ${e.stackTraceToString()}")
         } finally {
             println("[Client ${this@DoormanClient.id}] Closing client")
             this.close()
@@ -270,7 +271,6 @@ class DoormanClient private constructor(
                     .setResourceId(r.id)
                     .setPriority(r.priority)
                     .setWants(r.wants)
-                    .setHas(r.lease)
                     .build()
             )
         }
@@ -304,7 +304,7 @@ class DoormanClient private constructor(
             return Pair(bkOff,retryCount + 1)
         }
 
-        println("[$id : Perform Requests] Capacity Response: $capacityResponse")
+        println("[$id : Perform Requests] [ts:${System.currentTimeMillis()}] Capacity Response: $capacityResponse")
 
         // update client state with the response capacity and lease;
         for(r in capacityResponse.responseList) {
@@ -320,9 +320,9 @@ class DoormanClient private constructor(
 
             // Only send a message down the channel if the capacity has changed.
             if(oldCapacity != r.gets.capacity) {
-                CoroutineScope(Dispatchers.IO).launch {
+                scope.launch {
                     println("[$id : Perform Requests] Sending capacity update for ${r.resourceId}, from $oldCapacity to ${r.gets.capacity}")
-                    clientResource.capacity.trySend(r.gets.capacity)
+                    clientResource.capacity.send(r.gets.capacity)
                     println("[$id : Perform Requests] Capacity update sent for ${r.resourceId} , $oldCapacity -> ${r.gets.capacity}")
                 }
             } else {
@@ -333,7 +333,7 @@ class DoormanClient private constructor(
         // Figure out refresh interval, find the minimum refresh interval
         var interval = 15.minutes // some long duration which should get overwritten
         for( r in capacityResponse.responseList) {
-            val refresh = r?.gets?.refreshInterval?.milliseconds ?: 0.milliseconds
+            val refresh = r?.gets?.refreshInterval?.seconds ?: 0.milliseconds
             if(refresh < interval) {
                 interval = refresh
             }

@@ -38,7 +38,7 @@ class DoormanClientTest {
         println("Rate limiter created: $appleRateLimiter")
         // define a coroutine context to kill the rate limiter after 3 seconds
         CoroutineScope(Dispatchers.Default).launch {
-            delay(2000)
+            delay(5000)
             println("Closing the rate limiter and client")
             appleRateLimiter.close()
             client.close()
@@ -48,8 +48,8 @@ class DoormanClientTest {
         val start = System.currentTimeMillis()
         println("Start: $start")
         val result = appleRateLimiter.wait()
-        println("Wait: $result , Time taken: ${System.currentTimeMillis() - start}") // Should be around 100ms as we are waiting to manage a rate of 10 RPS
-
+        println("Wait: $result , Time taken: ${(System.currentTimeMillis() - start)/1000.00} seconds") // Should be around 100ms as we are waiting to manage a rate of 10 RPS
+        assert(System.currentTimeMillis() - start < 250)
     }
 
 }
