@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.Channel
 
 interface IResource {
     val id: String
+    val client: DoormanClient?
     val wants: Double
     val capacity: Channel<Double>
 
@@ -12,7 +13,7 @@ interface IResource {
 
     var lease: Doorman.Lease?
 
-    val client: DoormanClient
+    // val client: DoormanClient
     suspend fun ask(capacity: Double): Throwable?
     suspend fun release(): Throwable?
 

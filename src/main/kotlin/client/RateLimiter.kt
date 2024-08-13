@@ -46,8 +46,7 @@ class RateLimiter(private val resource: IResource) {
             withContext(scope.coroutineContext) {
                 val response = Channel<Channel<Boolean>>()
                 events.send(response) // Tricky! This is a channel that is sent in the events channel
-                val unfreeze =
-                    response.receive() // Tricky! This is the value received from the channel sent by the function generating events
+                val unfreeze = response.receive() // Tricky! This is the value received from the channel sent by the function generating events
 
                 val job = this.coroutineContext.job
 
@@ -55,18 +54,18 @@ class RateLimiter(private val resource: IResource) {
 
                     unfreeze.onReceiveCatching { uf ->
                         uf.getOrNull() ?: throw uf.exceptionOrNull() ?: throw CancellationException("Unfreeze channel is closed")
-                        println("Received a value from the unfreeze channel")
+                        println("[RL ${resource.id}] Received a value from the unfreeze channel")
                         if (unfreeze.isClosedForReceive) {
-                            println("Channel is closed , receive:${unfreeze.isClosedForReceive} , send:${unfreeze.isClosedForSend} or failed. This indicated that the rate limiter is closed.")
+                            println("[RL ${resource.id}] Channel is closed , receive:${unfreeze.isClosedForReceive} , send:${unfreeze.isClosedForSend} or failed. This indicated that the rate limiter is closed.")
                             false
                         } else {
-                            println("Channel is open and waiting successful...")
+                            println("[RL ${resource.id}] Channel is open and waiting successful...")
                             true
                         }
                     }
 
                     job.onJoin {
-                        println("Job is joined")
+                        println("[RL ${resource.id}] Job is joined")
                         false
                     }
                 }
@@ -74,10 +73,10 @@ class RateLimiter(private val resource: IResource) {
 
             }
         } catch (ce: CancellationException) {
-            println("Cancellation exception caught: $ce")
+            println("[RL ${resource.id}] Cancellation exception caught: $ce")
             return false
         } catch (e: Exception) {
-            println("Generic Exception caught: $e")
+            println("[RL ${resource.id}] Generic Exception caught: $e")
             return false
         }
     }
@@ -87,7 +86,7 @@ class RateLimiter(private val resource: IResource) {
     }
 
     private fun recalculateRate(rate: Int, intervalMilliSeconds: Int): Triple<Int, Int, Duration> {
-        println("[RecalculateRate Input]  Rate: $rate, IntervalMilliSeconds: $intervalMilliSeconds")
+        println("[RL ${resource.id}] [RecalculateRate Input]  Rate: $rate, IntervalMilliSeconds: $intervalMilliSeconds")
         var newRate = rate
         var newInterval = Duration.ofMillis(intervalMilliSeconds.toLong())
         var leftoverRate = 0
@@ -118,14 +117,14 @@ class RateLimiter(private val resource: IResource) {
                 0
             }
             capacity <= 10 -> {
-                println("Capacity is less than 10")
+                println("[RL ${resource.id}] Capacity $capacity is less than 10")
                 val (newRate, leftoverRate, newInterval) = recalculateRate(1, (1000 / capacity).toInt())
                 rate = newRate
                 interval = newInterval
                 leftoverRate
             }
             else -> {
-                println("Capacity is greater than 10")
+                println("[RL ${resource.id}] Capacity $capacity is greater than 10")
                 val (newRate, leftoverRate, newInterval) = recalculateRate(capacity.toInt(), 1000)
                 rate = newRate
                 interval = newInterval
@@ -146,14 +145,14 @@ class RateLimiter(private val resource: IResource) {
         while (true) {
             // we don't really read and use data from this channel, this is more like a valve.
             val wakeUp = Channel<Boolean>()
-            println("[Run Loop ts: ${System.currentTimeMillis()}] isBlocked: $isBlocked, isUnlimited: $isUnlimited, rate: $rate, interval: $interval, subintervals: $subintervals, released: $released, leftoverRate: $leftoverRate")
+            println("[RL: ${resource.id}] [Run Loop ts: ${System.currentTimeMillis()}] isBlocked: $isBlocked, isUnlimited: $isUnlimited, rate: $rate, interval: $interval, subintervals: $subintervals, released: $released, leftoverRate: $leftoverRate")
             if (isBlocked.not() && isUnlimited.not()) {
-                CoroutineScope(Dispatchers.IO).launch {
-                    println("[Sleep-Start] Sleep starts for $interval at ${System.currentTimeMillis()}")
+                scope.launch {
+                    println("[RL: ${resource.id}] [Sleep-Start] Sleep starts for $interval at ${System.currentTimeMillis()}")
                     delay(interval.toMillis())
-                    println("[Sleep-End] Waking up after $interval at ${System.currentTimeMillis()}")
+                    println("[RL: ${resource.id}] [Sleep-End] Waking up after $interval at ${System.currentTimeMillis()}")
                     wakeUp.send(true)
-                    println("[WakeUp] Sent wakeUp signal")
+                    println("[RL: ${resource.id}] [WakeUp] Sent wakeUp signal")
                 }
             }
 
@@ -161,14 +160,19 @@ class RateLimiter(private val resource: IResource) {
 
                 resource.capacity.onReceive {
                     capacity ->
-                    println("Received capacity: $capacity for resource: ${resource.id}")
+//                    val capacity = c.getOrNull()
+//                    if(capacity == null) {
+//                        println("[ERROR] [RL ${resource.id}] : Received capacity is null")
+//                        return@onReceiveCatching 0
+//                    }
+                    println("[RL ${resource.id}] Received capacity: $capacity for resource: ${resource.id}")
                     // Updates rate and interval according to received capacity value from doorman
                     leftoverRateOriginal = updateRate(capacity)
-
+                    println("[RL ${resource.id}] Updated rate: $rate, interval: $interval, subintervals: $subintervals, Released: $released, LeftoverRate: $leftoverRate")
                     // Set released to 0, as a new cycle of co routines' releasing begins.
                     released = 0
                     leftoverRate = leftoverRateOriginal
-                    println("Received capacity: $capacity for resource: ${resource.id} , Rate: $rate, Interval: $interval, Subintervals: $subintervals, Released: $released, LeftoverRate: $leftoverRate")
+                    println("[RL ${resource.id}] Received capacity: $capacity for resource: ${resource.id} , Rate: $rate, Interval: $interval, Subintervals: $subintervals, Released: $released, LeftoverRate: $leftoverRate")
                     return@onReceive 0
                 }
 
@@ -189,7 +193,7 @@ class RateLimiter(private val resource: IResource) {
                 wakeUp.onReceive {
                     // Release waiting goroutines when timer is expired.
                     var max = rate
-                    println("[WakeUp: $it] -> Rate: $rate, Subintervals: $subintervals, Released: $released, LeftoverRate: $leftoverRate")
+                    println("[RL WakeUp: $it] -> Rate: $rate, Subintervals: $subintervals, Released: $released, LeftoverRate: $leftoverRate")
 
                     if(released < subintervals) {
                         if(leftoverRate > 0) {
@@ -205,10 +209,10 @@ class RateLimiter(private val resource: IResource) {
 
                     for(i in 0 until max) {
                         select {
-                            unfreeze.onSend(true) {
+                            unfreeze.onSend(true) { it->
                                 // We managed to release a goroutine
                                 // waiting on the other side of the channel.
-                                println("Released a coroutine")
+                                println("[RL: ${resource.id}] UnfreezeSend, Released a coroutine : $it")
                             }
                             // default:
                             // We failed to send value through channel, so nobody

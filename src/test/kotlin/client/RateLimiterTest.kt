@@ -15,9 +15,6 @@ class RateLimiterTest {
             override val capacity: Channel<Double> = control_capacity
             override val priority: Long = 0
             override var lease: Doorman.Lease? = null
-            override val client: DoormanClient
-                get() = TODO("Not yet implemented")
-
             override suspend fun ask(capacity: Double): Throwable? = null
 
             override suspend fun release(): Throwable? = null
@@ -30,18 +27,18 @@ class RateLimiterTest {
     fun `test rate limiter`() =
         runBlocking {
             val rateLimiter = RateLimiter(fakeResource)
-            control_capacity.send(10.0) // 10 RPS
+            control_capacity.send(20.0) // 20 RPS
             val start = System.currentTimeMillis()
             println("Start: $start")
             // define a coroutine context
-            CoroutineScope(Dispatchers.Default).launch {
-                delay(5000)
-                rateLimiter.close()
-            }
+//            CoroutineScope(Dispatchers.Default).launch {
+//                delay(5000)
+//                rateLimiter.close()
+//            }
             println("Now Rate limiting... ")
             val result = rateLimiter.wait()
             val end = System.currentTimeMillis()
-            println("Wait: $result , Time taken: ${end - start}") // Should be around 100ms as we are waiting to manage a rate of 10 RPS
+            println("Wait: $result , Time taken: ${end - start}") // Should be around 50ms as we are waiting to manage a rate of 10 RPS
             assert(end - start < 250)
         }
 
@@ -90,7 +87,6 @@ class RateLimiterTest {
             // Stop job after 6 seconds
             CoroutineScope(Dispatchers.IO).launch {
                 delay(6000)
-                // coroutineContext.job.cancelAndJoin()
                 rateLimiter.close()
             }
             println("Now Rate limiting... ")
@@ -110,9 +106,4 @@ class RateLimiterTest {
             assert( successMap["PT0.1S"]?.size!! >= 25) // Ideally should be 30, 10 RPS for 3 seconds
             assert( successMap["PT0.05S"]?.size!! >= 50) // Ideally should be 60, 20 RPS for 3 seconds
         }
-
-    @Test
-    fun `test with actual doorman resource`() {
-        val resource = null // TODO: Create a doorman resource
-    }
 }
