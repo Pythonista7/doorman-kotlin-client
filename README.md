@@ -18,7 +18,8 @@ A resource is a unique identifier for a rate-limited entity. It is used to track
 A wrapper class that accepts a resource and applies the rate limit to it. It is used to control the rate limit for accessing a specific resource , by calling the `wait()` method before accessing the resource.
 
 ## Example
-See more in `DoormanClientTest.kt`
+
+#### Basic Usage
 ```kotlin
 runBlocking {
     val client = DoormanClient.create("example-client")
@@ -46,4 +47,82 @@ runBlocking {
 
     scope.cancelAndJoin() // close the tracker coroutine.
 }
+```
+
+#### Where it shines
+```kotlin
+
+runBlocking {
+        /*
+        This assumes that there is a resource as defined below in the doorman server
+          - identifier_glob: fair
+            capacity: 1000
+            safe_capacity: 10
+            description: fair share example
+            algorithm:
+              kind: FAIR_SHARE
+              lease_length: 60
+              refresh_interval: 5 // keeping this small for testing purposes.
+         */
+        val small1Client = DoormanClient.create("small1Client-client")
+        val small1Resource = small1Client.requestResource("fair",100.0)
+
+        val small2Client = DoormanClient.create("small2Client-client")
+        val small2Resource = small2Client.requestResource("fair",100.0)
+
+        val small3Client = DoormanClient.create("small3Client-client")
+        val small3Resource = small3Client.requestResource("fair",100.0)
+
+        val small4Client = DoormanClient.create("small4Client-client")
+        val small4Resource = small4Client.requestResource("fair",100.0)
+
+        val bigClient = DoormanClient.create("bigClient-client")
+        val bigResource = bigClient.requestResource("fair",1000.0)
+
+        delay(5000)
+
+        val biggerClient = DoormanClient.create("biggerClient-client")
+        val biggerResource = biggerClient.requestResource("fair",2000.0)
+
+        println("Initially...")
+        println("New Capacity of small1: ${small1Resource.lease?.capacity}")
+        println("New Capacity of small2: ${small2Resource.lease?.capacity}")
+        println("New Capacity of small3: ${small3Resource.lease?.capacity}")
+        println("New Capacity of small4: ${small4Resource.lease?.capacity}")
+        println("New Capacity of big: ${bigResource.lease?.capacity}")
+        println("New Capacity of bigger: ${biggerResource.lease?.capacity}")
+
+        delay(8000)
+
+        println("After 8 seconds...")
+        println("New Capacity of small1: ${small1Resource.lease?.capacity}")
+        println("New Capacity of small2: ${small2Resource.lease?.capacity}")
+        println("New Capacity of small3: ${small3Resource.lease?.capacity}")
+        println("New Capacity of small4: ${small4Resource.lease?.capacity}")
+        println("New Capacity of big: ${bigResource.lease?.capacity}")
+        println("New Capacity of bigger: ${biggerResource.lease?.capacity}")
+
+    }
+```
+
+#### Output
+```text
+Initially...
+New Capacity of small1: 100.0
+New Capacity of small2: 100.0
+New Capacity of small3: 100.0
+New Capacity of small4: 100.0
+New Capacity of big: 600.0
+New Capacity of bigger: 0.0
+
+...
+...
+
+After 8 seconds...
+New Capacity of small1: 100.0
+New Capacity of small2: 100.0
+New Capacity of small3: 100.0
+New Capacity of small4: 100.0
+New Capacity of big: 300.0
+New Capacity of bigger: 300.0
 ```
