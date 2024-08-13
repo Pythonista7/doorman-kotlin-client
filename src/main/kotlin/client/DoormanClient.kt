@@ -15,7 +15,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 
-const val MIN_REFRESH_INTERVAL = 20L
+const val MIN_REFRESH_INTERVAL = 20L // 20 milliseconds
 
 class DoormanClient private constructor(
     id: String,
@@ -24,26 +24,23 @@ class DoormanClient private constructor(
     private val scope = CoroutineScope(Dispatchers.IO + job + CoroutineName("ClientSupervisor"))
     private val id: String = id
 
+    val resources: MutableMap<String, IResource> = mutableMapOf()
+
+    private var master: String = "localhost"
+    private var port: Int = 15000
+
+    private var channel: ManagedChannel =
+        ManagedChannelBuilder
+            .forAddress(master, port)
+            .usePlaintext()
+            .build()
+
+    private var rpcClient: CapacityGrpc.CapacityBlockingStub = CapacityGrpc.newBlockingStub(channel)
+
+    private val newResource: Channel<ResourceAction> = Channel<ResourceAction>()
+
+    val releaseResource: Channel<ResourceAction> = Channel<ResourceAction>()
     companion object {
-
-        val resources: MutableMap<String, IResource> = mutableMapOf()
-
-        private var master: String = "localhost"
-        private var port: Int = 15000
-
-        private var channel: ManagedChannel =
-            ManagedChannelBuilder
-                .forAddress(master, port)
-                .usePlaintext()
-                .build()
-
-        private var rpcClient: CapacityGrpc.CapacityBlockingStub = CapacityGrpc.newBlockingStub(channel)
-
-        @JvmStatic
-        private val newResource: Channel<ResourceAction> = Channel<ResourceAction>()
-
-
-        val releaseResource: Channel<ResourceAction> = Channel<ResourceAction>()
 
         fun create(id: String): DoormanClient {
             val c = DoormanClient(id)
@@ -63,7 +60,7 @@ class DoormanClient private constructor(
     }
 
     suspend fun requestResourceWithPriority(id:String, capacity: Double, priority:Long): Resource {
-        val resource = Resource(id = id, wants = capacity, priority = priority)
+        val resource = Resource(id = id, client = this, wants = capacity, priority = priority)
         val errC: Channel<Throwable?> = Channel(onUndeliveredElement = { e -> println("[ERROR] Error in errC: $e") })
 
         val newResourceAction = ResourceAction(resource,errC)
@@ -185,7 +182,6 @@ class DoormanClient private constructor(
 
 
                 var interval : Long
-                // println("[Client $id] Run Loop at ${System.currentTimeMillis()} performing requests...")
                 val (newInterval, newRetryCount) = if(resources.isEmpty().not()) {
                     performRequests(retryCount)
                 } else {

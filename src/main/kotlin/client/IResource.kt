@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.Channel
 
 interface IResource {
     val id: String
+    val client: DoormanClient?
     val wants: Double
     val capacity: Channel<Double>
 

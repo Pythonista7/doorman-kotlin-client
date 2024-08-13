@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 
 class Resource(
     override val id: String,
+    override val client: DoormanClient? = null,
     wants: Double = 0.0,
     priority: Long = 0,
 ) : IResource {
@@ -20,6 +21,7 @@ class Resource(
     override var lease: Doorman.Lease? = null
 
     override suspend fun ask(requestedWants: Double): Throwable? {
+        client ?: throw IllegalStateException("Client not set for resource $id")
         if (requestedWants < 0) {
             return IllegalArgumentException("Wants must be positive")
         }
@@ -30,8 +32,9 @@ class Resource(
     }
 
     override suspend fun release(): Throwable? {
+        client ?: throw IllegalStateException("Client not set for resource $id")
         val errorChan = Channel<Throwable?>()
-        DoormanClient.releaseResource.send(
+        client.releaseResource.send(
             ResourceAction(resource = this@Resource ,errC = errorChan)
         )
         return errorChan.receiveCatching().getOrNull()
