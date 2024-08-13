@@ -11,6 +11,8 @@ class RateLimiterTest {
     val fakeResource: IResource =
         object : IResource {
             override val id: String = "fake"
+            override val client: DoormanClient?
+                get() = TODO("Not yet implemented")
             override val wants: Double = 500.0
             override val capacity: Channel<Double> = control_capacity
             override val priority: Long = 0
