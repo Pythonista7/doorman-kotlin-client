@@ -22,7 +22,7 @@ class DoormanClient private constructor(
 ) {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.IO + job + CoroutineName("ClientSupervisor"))
-    private val id: String = id
+    val id: String = id
 
     val resources: MutableMap<String, IResource> = mutableMapOf()
 
@@ -41,7 +41,6 @@ class DoormanClient private constructor(
 
     val releaseResource: Channel<ResourceAction> = Channel<ResourceAction>()
     companion object {
-
         fun create(id: String): DoormanClient {
             val c = DoormanClient(id)
             return c
@@ -50,6 +49,7 @@ class DoormanClient private constructor(
     }
 
     init {
+
         CoroutineScope(Dispatchers.Unconfined + job).launch(CoroutineName("ClientRunLoop")) { run() }
     }
     fun getMaster(): String = "$master:$port"
@@ -130,7 +130,6 @@ class DoormanClient private constructor(
         try {
             println("[Client ${this.id}] Starting run loop")
             while (true) {
-                println("[Client ${this.id}] Selecting in run loop")
                 select {
                     newResource.onReceive { rA ->
                         try {
@@ -185,6 +184,7 @@ class DoormanClient private constructor(
                 val (newInterval, newRetryCount) = if(resources.isEmpty().not()) {
                     performRequests(retryCount)
                 } else {
+                    // println("[Client ${this.id}] No resources, skipped performing requests, sleeping for 1 second")
                     Pair(MIN_REFRESH_INTERVAL.toLong(),retryCount)
                 }
                 interval = newInterval
@@ -229,12 +229,13 @@ class DoormanClient private constructor(
                 .build()
 
         try {
+            println("[Remove Resource] Releasing capacity $releaseCapacityReq")
             val response = rpcClient.releaseCapacity(releaseCapacityReq)
             println("Release Capacity Response: $response")
             if(response.mastership.masterAddress == null) {
-                return MasterUnknownError("Master address is null in response")
+                return MasterUnknownError("Master address is null in response for request $releaseCapacityReq")
             }
-            if(response.mastership.masterAddress != getMaster()) {
+            if(response.mastership.masterAddress.isNullOrEmpty().not() && response.mastership.masterAddress != getMaster()) {
                 refreshMaster()
                 // retry release
                 val retryResponse = rpcClient.releaseCapacity(releaseCapacityReq)
@@ -243,7 +244,9 @@ class DoormanClient private constructor(
                 }
             }
         } catch (e: Exception) {
-            return e
+            // We can ignore this error, as the resource will be released eventually when we do not renew the leave or the server forgets about it when masters change.
+            println("[Remove Resource] Error releasing capacity: $e")
+            return null
         }
 
         return null
@@ -261,15 +264,23 @@ class DoormanClient private constructor(
         val getCapacityReq = Doorman.GetCapacityRequest.newBuilder().setClientId(this.id)
 
         for(r in resources.values) {
+            val resourceReq = Doorman.ResourceRequest
+                .newBuilder()
+                .setResourceId(r.id)
+                .setPriority(r.priority)
+                .setWants(r.wants)
+
+
+            if(r.lease != null) {
+                resourceReq.setHas(r.lease!!)
+            }
+
             getCapacityReq.addResource(
-                Doorman.ResourceRequest
-                    .newBuilder()
-                    .setResourceId(r.id)
-                    .setPriority(r.priority)
-                    .setWants(r.wants)
-                    .build()
+                resourceReq.build()
             )
         }
+
+
 
         if(retryCount > 0) {
             println("[$id : Perform Requests] Retrying with retryCount $retryCount for $getCapacityReq")
@@ -300,7 +311,7 @@ class DoormanClient private constructor(
             return Pair(bkOff,retryCount + 1)
         }
 
-        println("[$id : Perform Requests] [ts:${System.currentTimeMillis()}] Capacity Response: $capacityResponse")
+        println("[$id : Perform Requests] [ts:${System.currentTimeMillis()}] Capacity Response: ${capacityResponse.responseList.get(0).gets.capacity}")
 
         // update client state with the response capacity and lease;
         for(r in capacityResponse.responseList) {

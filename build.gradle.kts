@@ -55,6 +55,8 @@ dependencies {
     implementation("javax.annotation:javax.annotation-api:1.3.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.5.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
+    testImplementation("io.ktor:ktor-client-core:2.3.12")
+    testImplementation("io.ktor:ktor-client-cio:2.3.12")
 
 }
 

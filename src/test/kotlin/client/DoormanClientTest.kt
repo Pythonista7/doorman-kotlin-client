@@ -21,14 +21,31 @@ class DoormanClientTest {
     }
 
     @Test
-    fun `addResourceWithClientTest`(): Unit = runBlocking(CoroutineName("ash-test-1")) {
+    fun `addAndReleaseResourceWithClientTest`(): Unit = runBlocking(CoroutineName("ash-test-1")) {
         val client = DoormanClient.create("test-client")
         println("Client created: $client")
-        client.requestResource("test-resource", 10.0)
+        val r = client.requestResource("test-resource", 10.0)
         println("Resource created: test-resource")
+        delay(3000)
+        println("Resource Lease = ${r.lease}")
+        val err = r.release()
+        println("Resource released: $err")
         client.close()
     }
 
+//    @Test
+//    fun `testMasterandMasterRefresh`() = runBlocking {
+//        val client = DoormanClient.create("test-client")
+//        val resource = client.requestResource("test-resource", 10.0)
+//        println("Resource created: $resource")
+//        val master = client.getMaster()
+//        println("Master: $master")
+//        val masterRefresh = client.refreshMaster() // NOTE: private func
+//        println("Master Refresh: $masterRefresh")
+//        println("New Master: ${client.getMaster()}")
+//        client.close()
+//    }
+//
 
 
     @Test

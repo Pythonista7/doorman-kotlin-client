@@ -1,5 +1,6 @@
 package client
 
+import QpsRateLimiter
 import doorman.Doorman
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -28,7 +29,7 @@ class RateLimiterTest {
     @Test
     fun `test rate limiter`() =
         runBlocking {
-            val rateLimiter = RateLimiter(fakeResource)
+            val rateLimiter = QpsRateLimiter(fakeResource)
             control_capacity.send(20.0) // 20 RPS
             val start = System.currentTimeMillis()
             println("Start: $start")
@@ -47,7 +48,7 @@ class RateLimiterTest {
     @Test
     fun `test rate of the ratelimiter`() =
         runBlocking {
-            val rateLimiter = RateLimiter(fakeResource)
+            val rateLimiter = QpsRateLimiter(fakeResource)
             control_capacity.send(10.0) // 10 RPS
             val start = System.currentTimeMillis()
             println("Start: $start")
@@ -59,10 +60,11 @@ class RateLimiterTest {
 
             val successCounter = mutableListOf<Pair<Int,Long>>()
             for (i in 1..100) {
-                val loop_start = System.currentTimeMillis()
-                val result = rateLimiter.wait()
-                if (result) successCounter.add(Pair(i,System.currentTimeMillis() - loop_start )) else null
-                println("Wait: $result at $i , Time taken: ${System.currentTimeMillis() - loop_start}")
+                if(!rateLimiter.isActive()) break
+                val loopStart = System.currentTimeMillis()
+                rateLimiter.wait()
+                successCounter.add(Pair(i,System.currentTimeMillis() - loopStart ))
+                println("Wait: completed at $i , Time taken: ${System.currentTimeMillis() - loopStart}")
             }
             val end = System.currentTimeMillis()
             println("Time taken: ${end - start}")
@@ -74,7 +76,7 @@ class RateLimiterTest {
     @Test
     fun `test rate limiter with change of capacity`() =
         runBlocking {
-            val rateLimiter = RateLimiter(fakeResource)
+            val rateLimiter = QpsRateLimiter(fakeResource)
             control_capacity.send(10.0) // 10 RPS
             val start = System.currentTimeMillis()
             // Map -> { RPS1 : [ ( attempt_number , durationInMilli ),.. ] , RPS2: [ ( attempt_number , durationInMilli ),.. ] }
@@ -93,19 +95,20 @@ class RateLimiterTest {
             }
             println("Now Rate limiting... ")
             var ctr: Int = 0
-            while (rateLimiter.isActive) {
+            while (rateLimiter.isActive()) {
                 val loop_start = System.currentTimeMillis()
-                val result = rateLimiter.wait()
-                if(result) {
-                    val k = rateLimiter.currentInterval().toString()
-                    successMap.getOrPut(k,  { mutableListOf() })
-                        .add(Pair(++ctr, System.currentTimeMillis() - loop_start))
-                }
+
+                rateLimiter.wait()
+
+                val k = rateLimiter.currentInterval().toString()
+                successMap.getOrPut(k,  { mutableListOf() })
+                    .add(Pair(++ctr, System.currentTimeMillis() - loop_start))
+
                 println("Success Map => ${successMap.map { it.key to it.value.size }}")
-                println("Wait: $result , Time taken: ${System.currentTimeMillis() - loop_start}")
+                println("Wait: Completed , Time taken: ${System.currentTimeMillis() - loop_start}")
             }
             println("Average Time taken: ${successMap.map { it.key to it.value.map { it.second }.average() }}")
-            assert( successMap["PT0.1S"]?.size!! >= 25) // Ideally should be 30, 10 RPS for 3 seconds
-            assert( successMap["PT0.05S"]?.size!! >= 50) // Ideally should be 60, 20 RPS for 3 seconds
+            assert( successMap["100"]?.size!! >= 25) // Ideally should be 30, 10 RPS for 3 seconds
+            assert( successMap["50"]?.size!! >= 50) // Ideally should be 60, 20 RPS for 3 seconds
         }
 }
