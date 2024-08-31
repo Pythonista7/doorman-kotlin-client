@@ -2,6 +2,7 @@ import client.IResource
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
+import java.util.UUID
 import kotlin.math.min
 
 interface RateLimiter {
@@ -29,9 +30,11 @@ class QpsRateLimiter(private val resource: IResource) : RateLimiter {
     private var interval: Long = 0
 
     private var rate: Int = 0
+
+    // subintervals is the number of subintervals.
     private var subintervals: Int = 1
 
-    val resourceId: String = resource.id
+    val resourceId: String = "rm_"+ UUID.randomUUID().toString() + "_" + resource.id
 
     private var stop = false
 
@@ -74,7 +77,12 @@ class QpsRateLimiter(private val resource: IResource) : RateLimiter {
         var newInterval = interval.toLong()
         var leftoverRate = 0
 
+        // If the rate limit is more than 2 Hz we are going to divide the given
+        // interval to some number of subintervals and distribute the given rate
+        // among these subintervals to avoid burstiness which could take place otherwise.
         if (rate > 1 && interval >= 20) {
+            // Try to have one event per subinterval, but don't let subintervals go
+            // below 20ms, that pounds on things too hard.
             subintervals = min(rate.toDouble(), (interval / 20).toDouble()).toInt()
             newRate = rate / subintervals
             leftoverRate = rate % subintervals
@@ -109,6 +117,7 @@ class QpsRateLimiter(private val resource: IResource) : RateLimiter {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun run() {
         var released = 0
         var leftoverRate = 0
@@ -130,12 +139,14 @@ class QpsRateLimiter(private val resource: IResource) : RateLimiter {
                     this@QpsRateLimiter.scope.coroutineContext.cancel()
                     this@QpsRateLimiter.job.cancel()
                 }
+
                 resource.capacity.onReceive { capacity ->
                     leftoverRateOriginal = update(capacity)
                     released = 0
                     leftoverRate = leftoverRateOriginal
                     lastReleaseTime = System.nanoTime()
                 }
+
                 requestChannel.onReceive { request ->
                     val now = System.nanoTime()
                     val elapsedNanos = now - lastReleaseTime
@@ -159,6 +170,7 @@ class QpsRateLimiter(private val resource: IResource) : RateLimiter {
                             leftoverRate = leftoverRateOriginal
                         }
                     } else {
+                        // cycle the request back into the channel after the expected interval
                         scope.launch {
                             delay((expectedInterval - elapsedNanos) / 1_000_000) // Convert ns to ms
                             requestChannel.send(request)

@@ -1,9 +1,9 @@
 package client
 
 import kotlinx.coroutines.*
+import newQPS
 import org.junit.jupiter.api.Test
 import java.time.ZonedDateTime
-import kotlin.concurrent.timerTask
 
 class DoormanClientTest {
 
@@ -53,7 +53,7 @@ class DoormanClientTest {
         val client = DoormanClient.create("apple-client")
         val fResourceApples = client.requestResource("proportional",10.0)
         println("Resource created: $fResourceApples")
-        val appleRateLimiter = RateLimiter(fResourceApples)
+        val appleRateLimiter = newQPS(fResourceApples)
         println("Rate limiter created: $appleRateLimiter")
         // define a coroutine context to kill the rate limiter after 3 seconds
         CoroutineScope(Dispatchers.Default).launch {
@@ -75,7 +75,7 @@ class DoormanClientTest {
     fun `Test enforced ratelimit`() = runBlocking {
         val client = DoormanClient.create("example-client")
         val resourceApples = client.requestResource("apples",10.0)
-        val rateLimit = RateLimiter(resourceApples)
+        val rateLimit = newQPS(resourceApples)
 
         val endTime = System.currentTimeMillis() + 7000
 

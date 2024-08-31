@@ -231,7 +231,7 @@ class DoormanClient private constructor(
         try {
             println("[Remove Resource] Releasing capacity $releaseCapacityReq")
             val response = rpcClient.releaseCapacity(releaseCapacityReq)
-            println("Release Capacity Response: $response")
+            println("Release Capacity Response: ${response.allFields}")
             if(response.mastership.masterAddress == null) {
                 return MasterUnknownError("Master address is null in response for request $releaseCapacityReq")
             }
@@ -258,7 +258,6 @@ class DoormanClient private constructor(
      * performRequests performs the actual RPCs to the server. It returns the interval in Milli and new retryCount
      */
     private fun performRequests(retryCount: Int): Pair<Long, Int> {
-        println("[$id : Perform Requests] Performing requests at ${System.currentTimeMillis()}")
 
         // Create a get capacity request in bulk for all resources to reduce QPS to doorman servers
         val getCapacityReq = Doorman.GetCapacityRequest.newBuilder().setClientId(this.id)
@@ -296,7 +295,6 @@ class DoormanClient private constructor(
             for (r in resources.values) {
                 if (r.lease != null && r.lease!!.expiryTime < System.currentTimeMillis()) {
                     CoroutineScope(Dispatchers.IO).launch{
-                        println("[$id : Perform Requests] Resource ${r.id} has expired, releasing by setting capacity to 0.")
                         r.capacity.send(0.0)
                         println("[$id : Perform Requests] Resource ${r.id} has been released on expiry.")
                     }
@@ -311,7 +309,7 @@ class DoormanClient private constructor(
             return Pair(bkOff,retryCount + 1)
         }
 
-        println("[$id : Perform Requests] [ts:${System.currentTimeMillis()}] Capacity Response: ${capacityResponse.responseList.get(0).gets.capacity}")
+        // println("[$id : Perform Requests] [ts:${System.currentTimeMillis()}] Capacity Response: ${capacityResponse.responseList.get(0).gets.capacity}")
 
         // update client state with the response capacity and lease;
         for(r in capacityResponse.responseList) {
@@ -328,12 +326,11 @@ class DoormanClient private constructor(
             // Only send a message down the channel if the capacity has changed.
             if(oldCapacity != r.gets.capacity) {
                 scope.launch {
-                    println("[$id : Perform Requests] Sending capacity update for ${r.resourceId}, from $oldCapacity to ${r.gets.capacity}")
                     clientResource.capacity.send(r.gets.capacity)
                     println("[$id : Perform Requests] Capacity update sent for ${r.resourceId} , $oldCapacity -> ${r.gets.capacity}")
                 }
             } else {
-                println("[$id : Perform Requests] Capacity for ${r.resourceId} has not changed, not sending update")
+                //println("[$id : Perform Requests] Capacity for ${r.resourceId} has not changed, not sending update")
             }
         }
 
